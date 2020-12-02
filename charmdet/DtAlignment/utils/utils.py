@@ -135,7 +135,7 @@ def distance_to_wire(tube,mom=None,pos=None):
     vtop,vbot = tube.wire_end_positions()    
     normal_vector = mom.Cross(vtop-vbot)
     vec_any_two_points = vbot - pos
-    distance = (abs(vec_any_two_points.Dot(normal_vector)) / normal_vector.Mag()) * u.mm
+    distance = (abs(vec_any_two_points.Dot(normal_vector)) / normal_vector.Mag())
 
     return distance
 

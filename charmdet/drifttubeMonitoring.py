@@ -1,5 +1,6 @@
 #import yep
-import ROOT,os,time,sys,operator,atexit
+import ROOT,os,time,sys,operator,atexit,multiprocessing,re
+###from macro.makeCascade import name
 ROOT.gROOT.ProcessLine('typedef std::unordered_map<int, std::unordered_map<int, std::unordered_map<int, std::vector<MufluxSpectrometerHit*>>>> nestedList;')
 
 from decorators import *
@@ -17,6 +18,7 @@ from argparse import ArgumentParser
 import shipunit as u
 import rootUtils as ut
 from array import array
+from functools import partial
 
 ########
 zeroField    = False
@@ -74,6 +76,7 @@ parser.add_argument("-e", "--eos", dest="onEOS", help="files on EOS", default=Fa
 parser.add_argument("-u", "--update", dest="updateFile", help="update file", default=False)
 parser.add_argument("-i", "--input", dest="inputFile", help="input histo file", default='residuals.root')
 parser.add_argument("-g", "--geofile", dest="geoFile", help="input geofile", default='')
+
 
 options = parser.parse_args()
 fnames = []
@@ -137,9 +140,9 @@ sGeo = ROOT.gGeoManager
 nav = sGeo.GetCurrentNavigator()
 top = sGeo.GetTopVolume()
 top.SetVisibility(0)
-if options.withDisplay:
- try: top.Draw('ogl')
- except: pass
+#if options.withDisplay:
+# try: top.Draw('ogl')
+# except: pass
 
 saveGeofile = False
 import saveBasicParameters
@@ -1141,6 +1144,1405 @@ def displayDTLayers():
  tc = h['layerDisplay'].cd(1)
  h['upstream'].Draw()
  h['upstreamG'].Draw('sameP')
+
+def findTracksnew_mod(rt, PR = 13, linearTrackModel = False,withCloneKiller=True):
+    
+      
+   """
+    Slight variation of findTracksnew that uses several rt relations for
+    different groups of channels.
+    
+    rt: rt relations used
+    PR: determines wether a new fit is done. This is the case if PR==13.
+    
+    
+   """ 
+   print("In findTracksnew_mod:")
+   print(rt)
+   if PR < 3 and sTree.GetBranch('FitTracks'): return sTree.FitTracks
+   if PR%2==0 : 
+       trackCandidates = testPR()
+       if len(trackCandidates)>1: trackCandidates=cloneKiller(trackCandidates)
+       return trackCandidates
+   if PR == 13: # refit tracks
+        trackCandidates=[]
+        keysToDThits = MakeKeysToDThits(cuts['lateArrivalsToT'])
+        for itrack in range(sTree.FitTracks.GetEntries()):
+           trInfo = sTree.TrackInfos[itrack]
+           oTrack = sTree.FitTracks[itrack]
+           P = 5.
+           fst = oTrack.getFitStatus()
+           if fst.isFitConverged() and fst.getNdf()>1:
+            try: 
+             sta = oTrack.getFittedState(0)
+             P   = sta.getMomMag()
+            except: 
+             print "cannot get fittedState(0)"
+           hitList=[]
+           for n in range(trInfo.N()):
+              detID = trInfo.detId(n)
+              hitList.append(keysToDThits[detID][0])
+           aTrack = fitTrackrt_mod(hitList,rt,P)
+           if type(aTrack) == type(1): continue
+           trackCandidates.append(aTrack)
+        return trackCandidates
+# switch of trackfit material effect in first pass
+   materialEffects(False)
+   keysToDThits=MakeKeysToDThits(cuts['lateArrivalsToT'])
+   vbot,vtop = strawPositionsBotTop[30002001]
+   T3z = vbot[2]
+   T3ytop = vtop[1]
+   T3ybot = vbot[1]
+   trackCandidates = []
+   clusters = findDTClusters(removeBigClusters=True)
+   # now we have to make a loop over all combinations 
+   allStations = True
+   for s in range(1,5):
+      if len(clusters[s][0])==0: allStations = False
+   if len(clusters[1][1])==0 or len(clusters[2][2])==0:   allStations = False
+   if allStations:
+    t1t2cand = []
+    # list of lists of cluster1, cluster2, x
+    t3t4cand = []
+    h['dispTrackSeg'] = []
+    nTrx = -1
+    for cl1 in clusters[1][0]:
+     for cl2 in clusters[2][0]:
+      slopeA,bA = getSlopes(cl1,cl2)
+      x1 = zgoliath*slopeA+bA
+      t1t2cand.append([cl1,cl2,x1,slopeA,bA])
+      nTrx+=1
+      if Debug:
+       nt = len(h['dispTrackSeg'])
+       h['dispTrackSeg'].append( ROOT.TGraph(2) )
+       h['dispTrackSeg'][nt].SetPoint(0,0.,bA)
+       h['dispTrackSeg'][nt].SetPoint(1,400.,slopeA*400+bA)
+       h['dispTrackSeg'][nt].SetLineColor(ROOT.kRed+nTrx)
+       h['dispTrackSeg'][nt].SetLineWidth(2)
+       h['simpleDisplay'].cd(1)
+       h['dispTrackSeg'][nt].Draw('same')
+       nt+=1
+    for cl1 in clusters[3][0]:
+     for cl2 in clusters[4][0]:
+      slopeA,bA = getSlopes(cl1,cl2)
+      x1 = zgoliath*slopeA+bA
+      t3t4cand.append([cl1,cl2,x1,slopeA,bA])
+      if Debug:
+       nt = len(h['dispTrackSeg'])
+       h['dispTrackSeg'].append( ROOT.TGraph(2) )
+       h['dispTrackSeg'][nt].SetPoint(0,300.,slopeA*300+bA)
+       h['dispTrackSeg'][nt].SetPoint(1,900.,slopeA*900+bA)
+       h['dispTrackSeg'][nt].SetLineColor(ROOT.kBlue)
+       h['dispTrackSeg'][nt].SetLineWidth(2)
+       h['simpleDisplay'].cd(1)
+       h['dispTrackSeg'][nt].Draw('same')
+       nt+=1
+    if Debug: 
+      print "trackCandidates",len(t1t2cand),len(t3t4cand)
+      h['simpleDisplay'].Update()
+    nTrx = -1
+    for nt1t2 in range(len(t1t2cand)):
+     t1t2 = t1t2cand[nt1t2]
+     nTrx+=1
+     for nt3t4 in range(len(t3t4cand)):
+      t3t4 = t3t4cand[nt3t4]
+      delx = t3t4[2]-t1t2[2]
+      h['delx'].Fill(delx)
+# check also extrapolations at t1 t2, or t3 t4
+# makes only sense for zero field
+      if linearTrackModel: makeLinearExtrapolations(t1t2,t3t4)
+      if abs(delx) < cuts['delxAtGoliath']:
+# check for matching u and v hits, make uv combination and check extrap to 
+       stereoHits = {}
+       if Debug:  print "stereo clusters",len(clusters[1][1]),len(clusters[2][2])
+       for nu in range(len(clusters[1][1])):
+        stereoHits[1]={}
+        clu = clusters[1][1][nu]
+        mean_u = 0
+        n_u = 0 
+        for cl in clu:
+           botA,topA = strawPositionsBotTop[cl[0].GetDetectorID()]
+           z = (botA[2]+topA[2])/2.
+           sl  = (botA[1]-topA[1])/(botA[0]-topA[0])
+           b = topA[1]-sl*topA[0]
+           yest = sl*(t1t2[3]*topA[2]+t1t2[4])+b
+           rc = h['yest'].Fill(yest)
+           if yest > botA[1]+cuts['yMax'] : continue
+           if yest < topA[1]-cuts['yMax'] : continue
+           stereoHits[1][cl[0].GetDetectorID()]=[cl[0],sl,b,yest,z]
+           mean_u+=yest
+           n_u+=1
+        mean_u = mean_u/float(n_u)
+        if Debug:  print "0 stereo u",len(stereoHits[1])
+        for x in stereoHits[1].keys():
+           delta = stereoHits[1][x][3]-mean_u
+           rc = h['delta_mean_uv'].Fill(delta)
+           if abs(delta)>cuts['hitDist']:  stereoHits[1].pop(x)
+# new idea, calulate average of y coordinates, reject hits with distance > 2.5cm!!!!!
+        for nv in range(len(clusters[2][2])):
+         mean_v = 0
+         n_v = 0 
+         stereoHits[2]={}
+         clv =  clusters[2][2][nv]
+         for cl in clv: 
+           botA,topA = strawPositionsBotTop[cl[0].GetDetectorID()]
+           z = (botA[2]+topA[2])/2.
+           sl  = (botA[1]-topA[1])/(botA[0]-topA[0])
+           b = topA[1]-sl*topA[0]
+           yest = sl*(t1t2[3]*topA[2]+t1t2[4])+b
+           rc = h['yest'].Fill(yest)
+           if yest > botA[1]+cuts['yMax'] : continue
+           if yest < topA[1]-cuts['yMax'] : continue
+           stereoHits[2][cl[0].GetDetectorID()]=[cl[0],sl,b,yest,z]
+           mean_v+=yest
+           n_v+=1
+         mean_v = mean_v/float(n_v)
+         if Debug:  print "1 stereo v",len(stereoHits[2])
+         for x in stereoHits[2].keys():
+           delta = stereoHits[2][x][3]-mean_v
+           rc = h['delta_mean_uv'].Fill(delta)
+           if abs(delta)>cuts['hitDist']:  stereoHits[2].pop(x)
+#
+         if Debug:  print "stereo  u v",len(stereoHits[1]),len(stereoHits[2])
+         if len(stereoHits[1])<cuts['minLayersUV'] or len(stereoHits[2])<cuts['minLayersUV']: continue
+         slopeA,bA = getSlopes(stereoHits[1],stereoHits[2],'_uv')
+         if Debug: 
+            print "y slope",slopeA,bA
+            print '----> u'
+            for x in stereoHits[1]:  print stereoHits[1][x][3],stereoHits[1][x][4]
+            print '----> v'
+            for x in stereoHits[2]:  print stereoHits[2][x][3],stereoHits[2][x][4]
+         # remove unphysical combinations, pointing outside t3
+         yAtT3 = T3z*slopeA + bA
+         if Debug: print "uv",nu,nv,yAtT3,T3ybot ,T3ytop , (yAtT3 - T3ybot)  > 2*cuts['yMax'] ,(T3ytop - yAtT3) > 2*cuts['yMax'] 
+         if  (yAtT3 - T3ybot)  > 2*cuts['yMax']  or (T3ytop - yAtT3) > 2*cuts['yMax'] : continue
+         if Debug:
+          nt = len(h['dispTrackSeg'])
+          h['dispTrackSeg'].append( ROOT.TGraph(2) )
+          h['dispTrackSeg'][nt].SetPoint(0,0.,bA)
+          h['dispTrackSeg'][nt].SetPoint(1,900.,slopeA*900+bA)
+          h['dispTrackSeg'][nt].SetLineColor(ROOT.kRed+nTrx)
+          h['dispTrackSeg'][nt].SetLineWidth(2)
+          h['simpleDisplay'].cd(1)
+          h['dispTrackSeg'][nt].Draw('same')
+          h['simpleDisplay'].Update()
+          nt+=1
+#
+         hitList = []
+         for p in range(2):
+          for cl in t1t2[p]: hitList.append(cl[0])
+         for p in stereoHits:
+          for cl in stereoHits[p]: hitList.append(stereoHits[p][cl][0])
+         for p in range(2):
+          for cl in t3t4[p]: hitList.append(cl[0])
+# add late arrivals
+         if cuts['lateArrivalsToT']<3000:
+          tmp=[]
+          for x in hitList:
+           l =  len(keysToDThits[x.GetDetectorID()])
+           for k in range(1,l):
+            key = keysToDThits[x.GetDetectorID()][k]
+            tmp.append(sTree.Digi_LateMufluxSpectrometerHits[key])
+          hitList=hitList+tmp
+         if linearTrackModel: 
+          trackCandidates = hitList
+         else:
+          if zeroField: momFromptkick = 1000.
+          else: momFromptkick=ROOT.TMath.Abs(1.03/(t3t4[3]-t1t2[3]+1E-20))
+          if Debug:  print "fit track t1t2 %i t3t4 %i stereo %i,%i, with hits %i,  delx %6.3F, pstart %6.3F"%(nt1t2,nt3t4,nu,nv,len(hitList),delx,momFromptkick)
+          aTrack = fitTrack(hitList,momFromptkick)
+          if Debug:  print "result of trackFit",aTrack
+          if type(aTrack) != type(1):
+# check if track is still in acceptance:
+            rc,pos,mom = extrapolateToPlane(aTrack,T3z)
+            reject = False
+            if ( (pos[1] - T3ybot)  > 1.2*cuts['yMax'] or (T3ytop - pos[1]) > 1.2*cuts['yMax'] ): reject = True
+            mStatistics = countMeasurements(aTrack,PR)
+            if len(mStatistics['u'])<cuts['minLayersUV'] or len(mStatistics['v'])<cuts['minLayersUV']: reject = True # require 2 measurements in each view
+            if not reject: trackCandidates.append(aTrack)
+            else:
+             aTrack.Delete()
+             if Debug: 
+              print "track rejected, outside T3 acceptance or not enough u/v measurements"
+              print  (pos[1] - T3ybot)  > 1.2*cuts['yMax'] , (T3ytop - pos[1]) > 1.2*cuts['yMax'] , \
+                      len(mStatistics['u'])<2, len(mStatistics['v'])<2
+   if withMaterial: materialEffects(True)
+   if withCloneKiller:
+    if len(trackCandidates)>1: trackCandidates = cloneKiller(trackCandidates)
+    if Debug: print "# tracks after clonekiller = ",len(trackCandidates)
+    if withMaterial:
+     for aTrack in trackCandidates:
+      fitter.processTrack(aTrack)
+      if Debug: printTrackMeasurements(aTrack,PR)
+# switch on trackfit material effect for final fit
+   return trackCandidates
+
+
+def fitTrackrt(hitlist,rt,Pstart=3.):
+    ###Fits Tracks to hits using the initial rt-relation
+    
+# need measurements
+   global fitter
+   hitPosLists={}
+   trID = 0
+   posM = ROOT.TVector3(0, 0, 20.)
+   momM = ROOT.TVector3(0,0,Pstart*u.GeV)
+# approximate covariance
+   covM = ROOT.TMatrixDSym(6)
+   resolution   = sigma_spatial
+   if not withTDC: resolution = 10*sigma_spatial
+   for  i in range(3):   covM[i][i] = resolution*resolution
+   # covM[0][0]=resolution*resolution*100.
+   for  i in range(3,6): covM[i][i] = ROOT.TMath.Power(resolution / (4.*2.) / ROOT.TMath.Sqrt(3), 2)
+   rep = ROOT.genfit.RKTrackRep(13)
+# start state
+   state = ROOT.genfit.MeasuredStateOnPlane(rep)
+   rep.setPosMomCov(state, posM, momM, covM)
+# create track
+   seedState = ROOT.TVectorD(6)
+   seedCov   = ROOT.TMatrixDSym(6)
+   rep.get6DStateCov(state, seedState, seedCov)
+   theTrack = ROOT.genfit.Track(rep, seedState, seedCov)
+   unSortedList = {}
+   tmpList = {}
+   k=0
+   for nhit in hitlist:
+      numHit = 0
+      if type(nhit)==type(1):   
+          hit = sTree.Digi_MufluxSpectrometerHits[nhit]
+          numHit = nhit
+      else: hit = nhit
+      vbot,vtop = strawPositionsBotTop[hit.GetDetectorID()]
+      tdc = hit.GetDigi()
+      s,v,p,l,view,channelID,tdcId,nRT = stationInfo(hit)
+      distance = 0
+      if withTDC: 
+        bin = int(round((tdc + 490)* 55000/5390))
+        distance = rt.GetBinContent(bin)
+      tmp = array('d',[vtop[0],vtop[1],vtop[2],vbot[0],vbot[1],vbot[2],distance])
+      unSortedList[k] = [ROOT.TVectorD(7,tmp),hit.GetDetectorID(),numHit,view]
+      tmpList[k] = vtop[2]
+      k+=1
+   sorted_z = sorted(tmpList.items(), key=operator.itemgetter(1))
+   for k in sorted_z:
+      tp = ROOT.genfit.TrackPoint() # note how the point is told which track it belongs to
+      hitCov = ROOT.TMatrixDSym(7)
+      hitCov[6][6] = resolution*resolution
+      # if unSortedList[k[0]][3] != '_x': hitCov[6][6] = 4*resolution*resolution
+      measurement = ROOT.genfit.WireMeasurement(unSortedList[k[0]][0],hitCov,1,6,tp) # the measurement is told which trackpoint it belongs to
+      measurement.setMaxDistance(ShipGeo.MufluxSpectrometer.InnerTubeDiameter/2.)
+      measurement.setDetId(unSortedList[k[0]][1])
+      # if Debug: print "trackfit add detid",unSortedList[k[0]][1],unSortedList[k[0]][0][6]
+      measurement.setHitId(unSortedList[k[0]][2])
+      tp.addRawMeasurement(measurement) # package measurement in the TrackPoint                                          
+      theTrack.insertPoint(tp)  # add point to Track
+   if not theTrack.checkConsistency():
+    print "track not consistent"
+    theTrack.Delete()
+    return -2
+# do the fit
+   timer.Start()
+   try:  fitter.processTrack(theTrack) # processTrackWithRep(theTrack,rep,True)
+   except:   
+      print "fit failed"
+      timer.Stop()
+      theTrack.Delete()
+      return -1
+    # print "time to fit the track",timer.RealTime()
+   if timer.RealTime()>1: # make a new fitter, didn't helped
+      error =  "fitTrack::very long fit time %8.6F  %6i"%(timer.RealTime(),len(hitlist))
+      ut.reportError(error)
+      if Debug: print error
+   fitStatus   = theTrack.getFitStatus()
+   if Debug: print "Fit result: converged chi2 Ndf",fitStatus.isFitConverged(),fitStatus.getChi2(),fitStatus.getNdf()
+   if not fitStatus.isFitConverged():
+      theTrack.Delete()
+      return -1
+   if Debug: 
+     chi2 = fitStatus.getChi2()/fitStatus.getNdf()
+     fittedState = theTrack.getFittedState()
+     P = fittedState.getMomMag()
+     print "track fitted Ndf #Meas P",fitStatus.getNdf(), theTrack.getNumPointsWithMeasurement(),P
+   if fitStatus.getNdf() < cuts['Ndf']:
+      theTrack.Delete()
+      return -2 
+   return theTrack
+
+def fitTrackrt_mod(hitlist,rt,Pstart=3.):
+    #fit tracks to hits using an input rt-relation 
+    #hitlist: Lst of hits used in this fit     
+    #rt: rt relations used in this fit
+
+# need measurements
+   print("In fitTrackrt_mod: ")
+   print(rt)
+   global fitter
+   hitPosLists={}
+   trID = 0
+   posM = ROOT.TVector3(0, 0, 20.)
+   momM = ROOT.TVector3(0,0,Pstart*u.GeV)
+# approximate covariance
+   covM = ROOT.TMatrixDSym(6)
+   resolution   = sigma_spatial
+   if not withTDC: resolution = 10*sigma_spatial
+   for  i in range(3):   covM[i][i] = resolution*resolution
+   # covM[0][0]=resolution*resolution*100.
+   for  i in range(3,6): covM[i][i] = ROOT.TMath.Power(resolution / (4.*2.) / ROOT.TMath.Sqrt(3), 2)
+   rep = ROOT.genfit.RKTrackRep(13)
+# start state
+   state = ROOT.genfit.MeasuredStateOnPlane(rep)
+   rep.setPosMomCov(state, posM, momM, covM)
+# create track
+   seedState = ROOT.TVectorD(6)
+   seedCov   = ROOT.TMatrixDSym(6)
+   rep.get6DStateCov(state, seedState, seedCov)
+   theTrack = ROOT.genfit.Track(rep, seedState, seedCov)
+   unSortedList = {}
+   tmpList = {}
+   k=0
+   test=ROOT.MufluxRTTools()
+   for nhit in hitlist:
+      numHit = 0
+      if type(nhit)==type(1):   
+          hit = sTree.Digi_MufluxSpectrometerHits[nhit]
+          numHit = nhit
+      else: hit = nhit
+      vbot,vtop = strawPositionsBotTop[hit.GetDetectorID()]
+      tdc = hit.GetDigi()
+      s,v,p,l,view,channelID,tdcId,nRT = stationInfo(hit)
+      distance = 0
+      if withTDC: 
+        bin = int(round((tdc + 490)* 30000/2940))
+        ordered_id=test.chnumgasorder(hit.GetDetectorID())
+        distance = rt[(ordered_id*len(rt))/576].GetBinContent(bin)
+      tmp = array('d',[vtop[0],vtop[1],vtop[2],vbot[0],vbot[1],vbot[2],distance])
+      unSortedList[k] = [ROOT.TVectorD(7,tmp),hit.GetDetectorID(),numHit,view]
+      tmpList[k] = vtop[2]
+      k+=1
+   sorted_z = sorted(tmpList.items(), key=operator.itemgetter(1))
+   for k in sorted_z:
+      tp = ROOT.genfit.TrackPoint() # note how the point is told which track it belongs to
+      hitCov = ROOT.TMatrixDSym(7)
+      hitCov[6][6] = resolution*resolution
+      # if unSortedList[k[0]][3] != '_x': hitCov[6][6] = 4*resolution*resolution
+      measurement = ROOT.genfit.WireMeasurement(unSortedList[k[0]][0],hitCov,1,6,tp) # the measurement is told which trackpoint it belongs to
+      measurement.setMaxDistance(ShipGeo.MufluxSpectrometer.InnerTubeDiameter/2.)
+      measurement.setDetId(unSortedList[k[0]][1])
+      # if Debug: print "trackfit add detid",unSortedList[k[0]][1],unSortedList[k[0]][0][6]
+      measurement.setHitId(unSortedList[k[0]][2])
+      tp.addRawMeasurement(measurement) # package measurement in the TrackPoint                                          
+      theTrack.insertPoint(tp)  # add point to Track
+   if not theTrack.checkConsistency():
+    print "track not consistent"
+    theTrack.Delete()
+    return -2
+# do the fit
+   timer.Start()
+   try:  fitter.processTrack(theTrack) # processTrackWithRep(theTrack,rep,True)
+   except:   
+      print "fit failed"
+      timer.Stop()
+      theTrack.Delete()
+      return -1
+    # print "time to fit the track",timer.RealTime()
+   if timer.RealTime()>1: # make a new fitter, didn't helped
+      error =  "fitTrack::very long fit time %8.6F  %6i"%(timer.RealTime(),len(hitlist))
+      ut.reportError(error)
+      if Debug: print error
+   fitStatus   = theTrack.getFitStatus()
+   if Debug: print "Fit result: converged chi2 Ndf",fitStatus.isFitConverged(),fitStatus.getChi2(),fitStatus.getNdf()
+   if not fitStatus.isFitConverged():
+      theTrack.Delete()
+      return -1
+   if Debug: 
+     chi2 = fitStatus.getChi2()/fitStatus.getNdf()
+     fittedState = theTrack.getFittedState()
+     P = fittedState.getMomMag()
+     print "track fitted Ndf #Meas P",fitStatus.getNdf(), theTrack.getNumPointsWithMeasurement(),P
+   if fitStatus.getNdf() < cuts['Ndf']:
+      theTrack.Delete()
+      return -2 
+   return theTrack
+
+def calcTreeinitial(nEvents=sTree.GetEntries()):
+    """ Running the simulation with the initial rt-relation. 
+        Returns a tree with the eventnumber, hittime, trackdistance, residuum,
+        hitradius and wether a channel is hit for every channel.
+
+    Version: 1.1.
+    """
+    TTracksEvent = ROOT.TTree("TTracksEvent","Event Information")
+    
+    residuum = numpy.empty((576), dtype="float32")
+    hitradius = numpy.empty((576), dtype="float32")
+    trackdistance = numpy.empty((576), dtype="float32")
+    channel = numpy.empty((576), dtype="uint16")
+    eventnum = numpy.empty((1), dtype="uint32")
+    hittime = numpy.empty((576), dtype="float32")
+     
+    TTracksEvent.Branch("channel",channel,"channel[576]/s")
+    TTracksEvent.Branch("eventnum",eventnum,"eventnum/i")
+    TTracksEvent.Branch("residuum",residuum,"residuum[576]/F")
+    TTracksEvent.Branch("hitradius",hitradius,"hitradius[576]/F")
+    TTracksEvent.Branch("trackdistance",trackdistance,"trackdistance[576]/F")
+    TTracksEvent.Branch("hittime",hittime,"hittime[576]/F")
+    
+    for n in range(0,nEvents):
+        print("Eventnummer:")
+        print(n)
+        eventnum[0]=n
+        for i in range(576):
+            residuum[i]= -100.0
+            hitradius[i]= -1.0
+            trackdistance[i]= -1000.0
+            hittime[i]= -1.0
+            channel[i]=0
+        rc = sTree.GetEvent(n)
+        if not findSimpleEvent(n): continue
+        tracks = findTracks(13)
+        for atrack in tracks:
+            calculate_distances_ch_tree(atrack,dt_modules,n,100,residuum,hitradius,trackdistance,hittime,channel)
+        for i in range(576):
+            if hittime[i]!= -1.0:
+                print("hittime after calc: ")
+                print(hittime[i])
+                break
+        TTracksEvent.Fill()          
+    return TTracksEvent
+
+def calc_residuum_fwhm(namef):
+    """
+    Calculate fwhm from a residua distribution
+    
+    """
+    fin=usefile(namef,"READ")
+    fout=usefile("resid_"+namef,"RECREATE")
+    tree=fin.Get("TTracksEvent")
+    TResids = ROOT.TH1D("residua","Residua of all modules",20000,-10,10)
+    for event in tree:
+        print(event.eventnum)
+        for i in range(576):
+            if event.residuum[i]!=-100:
+                TResids.Fill(event.residuum[i])
+    bin1 = TResids.FindFirstBinAbove(TResids.GetMaximum()/2)
+    bin2 = TResids.FindLastBinAbove(TResids.GetMaximum()/2)
+    fwhm = TResids.GetBinCenter(bin2)-TResids.GetBinCenter(bin1)
+    print(fwhm)
+    TResids.Write()
+    fout.Close()
+    fin.Close()
+
+
+def createTDCspecs(n=sTree.GetEntries(), m = 12, minToT=-999):
+    tdcspec = {}
+    for i in range(m):
+        name="tdcspec_"+str(i)
+        title="TDC spectrum for Module "+str(i)
+        tdcspec[i] = ROOT.TH1D(name,title,30000,-490,2450)
+    for i in range(n):
+        if i%1000==0: print(i)
+        rc = sTree.GetEvent(i)
+        for hit in sTree.Digi_MufluxSpectrometerHits:
+            if not hit.hasTimeOverThreshold(): continue
+            if hit.GetTimeOverThreshold() < minToT: continue
+            tdcnum = orderTDC(hit.GetDetectorID())
+            if tdcnum == -1: continue
+            tdcspec[tdcnum*m/576].Fill(hit.tdc())  
+    return tdcspec
+
+def tdcsmod_list(fins,N=12):
+    tdc_list={}
+    tdcspins={}
+    for j in range(N):
+        name="tdcspec_"+str(n)
+        title="TDC spectrum for Module "+str(n)
+        tdc_list[j]= ROOT.TH1D(name,title,30000,-490,2450)
+        for i in range(len(fins)):
+            name="tdcspec_"+str(j)
+            tdcspins[i+j*len(fins)]=fins[i].Get(name)
+            print("Entry tdcs: ")
+            print(tdcspins[i+j*len(fins)].GetEntries())
+        tdc_list[j]=add_tdcspecs(tdcspins,j,len(fins))
+        print("Entries in tdc_list: ")
+        print(tdc_list[j].GetEntries())
+    print("Entries in tdcs_list[0]: ")
+    print(tdc_list[0].GetEntries())
+    return tdc_list
+    
+def add_tdcspecs(tdcspecs,n,len_ins):
+    """
+    """
+    name="tdcspec_"+str(n)
+    title="TDC spectrum for Module "+str(n)
+    hs = ROOT.TH1D(name,title,30000,-490,2450)
+    for i in range(n*len_ins,(n+1)*len_ins):
+        print("Adding entries: ")
+        print(tdcspecs[i].GetEntries())
+        hs.Add(tdcspecs[i])
+    print("Stack histogram entries: ")
+    print(hs.GetEntries())    
+    return hs
+
+def RT_from_tdcspec(tdcspec):
+    """
+    Input: Drifttime spectrum, outpout: rt relation, calculated by integrating the spectrum 
+    """
+    RTrel=ROOT.TH1D("rtrelation","RT-Relation", 30000, -490,2450)
+    norm = 18.15/tdcspec.GetEntries()
+    for k in range(30000):
+        RTrel.SetBinContent(k,norm*tdcspec.Integral(0,k,""));
+    return RTrel
+    
+def orderTDC(n=0):
+    """
+    Taking the Channel ID of one drift tube as input, Output: Position of the drift tube
+    in order of the gas flow
+    """
+    if (n/10000000) < 3 and (n > 0):
+        tdc = (n/10000000-1)*96 + ((n/1000000)%10) * 48 + ((n/100000)%10)*2 + ((n/10000)%10) + (n%100)*4
+    elif n/10000000 == 4:
+        tdc =192 + ((n/100000)%10)*96 + ((n/10000)%10)*48 + n%100/12 + n%100%12*4
+    elif n/10000000 == 3:
+        tdc =192*2 + (1-(n/100000)%10)*96 + (1-(n/10000)%10)*48 + n%100/12 + n%100%12*4
+    else:
+        tdc=-1
+    return tdc    
+
+def rts_from_ins(ins,N=12):
+    """
+    Integrating the time drift spectrum over all input spills per module from time drift spectra per module per Spill
+    """
+    #### Combining the time drift spectra for each module from all Spills
+    tdcspec=tdcsmod_list(ins,N)
+    rts={}
+    for i in range(N):
+        ### Integrating the time drift spectrum
+        rts[i]=RT_from_tdcspec(tdcspec[i])
+    return rts
+def create_resids_channel(name):
+    """
+    Creates a TH1D of the residua of each module.
+    
+    name: Input file -.root
+    
+    author: Morten
+    
+    version: 1.0
+    """
+    
+    
+    fin=usefile(name+".root","READ")
+    fout=usefile(name+"_4_packs_resids.root","RECREATE")
+    
+    TResids = fin.Get("TTracksEvent")
+    resids={}
+    residua = ROOT.TH1D("res_all","Residua All Modules",20000,-10,10)
+    for i in range(12):
+        name="res_mod_"+str(i)
+        title="Residua of module Number "+str(i)
+        resids[i]=ROOT.TH1D(name,title,20000,-10,10)
+    for event in TResids:
+        print("Eventnumber:")
+        print(event.eventnum)
+        for i in range(48):
+            if event.residuum[144+i]!=-100:
+                residua.Fill(event.residuum[144+i])
+                resids[i/4].Fill(event.residuum[144+i])
+    for i in range(12):
+        print(resids[i].GetEntries())
+        resids[i].Write()
+    residua.Write()
+    fout.Close()
+    fin.    Close()
+
+def Make_rt_relation(name ,max_spills=None):
+    """ Creates the rt relation from several trackdistances and hittimes,
+     calculated using the initial rt relation.
+    
+    Version: 1.0
+    Date: Nov. 19. ,2020
+    
+    Parameter
+    -----------
+    max_spills: int
+    
+    """
+    refitted_files = []
+        
+    fins={}
+    trees={}
+    
+    fout=usefile(name ,"RECREATE")
+    file_pattern = re.compile("tree_initialSPILLDATA.+\_RT\_refit\.root")
+    for file in os.listdir('/nfs/neutrino/data3/SHiP/FairShip/uh2neutrino-wgs03/user/morten/initial_runs'):
+        match = file_pattern.match(file)
+        check=0
+        try:
+            inname="initial_runs/"+file
+            try_in=usefile(inname,"READ")
+            test_tree=try_in.Get("TTracksEvent")
+            if test_tree.GetEntries()>0:
+                print(test_tree.GetEntries())
+                check=1
+        except:
+            check=0
+        if match and check ==1:
+            refitted_files.append(match.group())
+    if max_spills:
+        refitted_files = refitted_files[:max_spills]
+    print(refitted_files)
+
+    for i in range(max_spills):
+        name="initial_runs/"+refitted_files[i]
+        fins[i]=usefile(name,"READ")
+        trees[i]=fins[i].Get("TTracksEvent")
+        print(trees[i])
+        
+    print(trees)
+    
+    
+    rts=rt_from_trees(trees,50)
+    
+    for i in range(len(rts)):
+        rts[i].Write()
+        print(rts[i])
+        print(rts[i].GetEntries())
+
+    print(rts)
+    fout.Close()
+    
+    return rts
+
+def create_resids_module(name):
+    """
+    Creates a TH1D of the residua of each module.
+    
+    name: Input file -.root
+    
+    author: Morten
+    
+    version: 1.0
+    """
+    
+    
+    fin=usefile(name+".root","READ")
+    fout=usefile(name+"_resids.root","RECREATE")
+    
+    TResids = fin.Get("TTracksEvent")
+    resids={}
+    residua = ROOT.TH1D("res_all","Residua All Modules",20000,-10,10)
+    for i in range(12):
+        name="res_mod_"+str(i)
+        title="Residua of module Number "+str(i)
+        resids[i]=ROOT.TH1D(name,title,20000,-10,10)
+    for event in TResids:
+        print("Eventnumber:")
+        print(event.eventnum)
+        for i in range(576):
+            if event.residuum[i]!=-100:
+                residua.Fill(event.residuum[i])
+                resids[i/48].Fill(event.residuum[i])
+    for i in range(12):
+        resids[i].Write()
+    residua.Write()
+    fout.Close()
+    fin.Close()
+    
+
+def calcTreewithrt(rt,nEvents=sTree.GetEntries()):
+    """ Calculates one iteration with a given rt relation.   
+
+    """
+    TTracksEvent = ROOT.TTree("TTracksEvent","Event Information")
+    
+    residuum = numpy.empty((576), dtype="float32")
+    hitradius = numpy.empty((576), dtype="float32")
+    trackdistance = numpy.empty((576), dtype="float32")
+    channel = numpy.empty((576), dtype="uint16")
+    eventnum = numpy.empty((1), dtype="uint32")
+    hittime = numpy.empty((576), dtype="float32")
+ 
+    TTracksEvent.Branch("residuum",residuum,"residuum[576]/F")
+    TTracksEvent.Branch("hitradius",hitradius,"hitradius[576]/F")
+    TTracksEvent.Branch("trackdistance",trackdistance,"trackdistance[576]/F")
+    TTracksEvent.Branch("hittime",hittime,"hittime[576]/F")
+    TTracksEvent.Branch("channel",channel,"channel[576]/s")
+    TTracksEvent.Branch("eventnum",eventnum,"eventnum/i")
+        
+    for n in range(0,nEvents):
+        print("Eventnummer:")
+        print(n)
+        eventnum[0]=n
+        for i in range(576):
+            residuum[i]= -100.0
+            hitradius[i]= -1.0
+            trackdistance[i]= -1000.0
+            hittime[i]= -1.0
+            channel[i]=0
+        
+        rc = sTree.GetEvent(n)
+        if not findSimpleEvent(n): continue
+        tracks = findTracksnew_mod(rt,13)
+        for atrack in tracks:
+            calculate_distances_ch_tree(atrack,dt_modules,n,100,residuum,hitradius,trackdistance,hittime,channel)
+        for i in range(576):
+            if hittime[i]!= -1.0:
+                print("hittime after calc: ")
+                print(hittime[i])
+                break
+        TTracksEvent.Fill()
+    print("Done")       
+    return TTracksEvent
+
+def rt_from_trees(trees,pm):
+    """
+    Determines rt relations with different residuum ranges from hittime, residuum
+    and trackdistance. 
+    
+    Morten: version 1.0
+    
+    Date 30.8.
+    
+    """
+    rtrelation = {}
+    tdist2Dch = {}
+    for k in range(12):
+        for j in range(10):
+            maxres=0.1+j/10.0
+            name = "tdist2D" + str(k+12*j)
+            title = "Time to Distance for channel" + str(k) + " within res: " + str(maxres)
+            tdist2Dch[k+j*12] = ROOT.TH2D(name, title, 30000, -490, 2450, 300, 0, 3)
+    for p in trees:
+        for j in trees[p]:
+            if (j.eventnum%10000==0):
+                print("Eventnummer:")
+                print(j.eventnum)
+            for l in range(576):
+                if j.channel[l] == 1:
+                    for i in range(10):
+                        maxres = 0.1*i/10.0+0.1
+                        if abs(j.residuum[l]) < maxres:
+                            tdist2Dch[l / 48+i*12].Fill(j.hittime[l], j.trackdistance[l])
+    for k in range(len(tdist2Dch)/10):
+        rtrelation[k] = detrt(tdist2Dch[k],pm)
+        rtrelation[k].SetTitle("RT-relation")
+        rtrelation[k].SetName("hrtrel"+str(k)+"pm"+str(pm))
+    return rtrelation
+
+def T2D_from_trees(trees):
+    """
+    Determines rt relations with different residuum ranges from hittime, residuum
+    and trackdistance. 
+    
+    Morten: version 1.0
+    
+    Date 30.8.
+    
+    """
+    rtrelation = {}
+    tdist2Dch = {}
+    
+    for k in range(12):
+        name = "tdist2D" + str(k+12)
+        title = "Time to Distance for channel" + str(k)
+        tdist2Dch[k] = ROOT.TH2D(name, title, 30000, -490, 2450, 300, 0, 3)
+        tdist2Dch[12] = ROOT.TH2D(name, title, 30000, -490, 2450, 300, 0, 3)
+    for p in trees:
+        for j in trees[p]:
+            print("Eventnummer:")
+            print(j.eventnum)
+            for l in range(576):
+                if j.channel[l] == 1:
+                    if j.residuum<0.5:
+                        tdist2Dch[l / 48].Fill(j.hittime[l], j.trackdistance[l])
+                        tdist2Dch[12].Fill(j.hittime[l], j.trackdistance[l])
+    return tdist2Dch
+
+def testing_rt_one_res_parallel(k,n=10):
+    fin=usefile("rts/rts_first_30_pm_"+str(k)+".root","READ")
+    go={}
+    for i in range(10):
+        go[i]=1
+    for i in range(120):
+        name="hrtrel"+str(i)+"pm"+str(k)
+        checkrt=fin.Get(name)
+        if not checkrt.GetEntries()>0:
+            go[i/12]=0
+    fin.Close()
+    pool=multiprocessing.Pool(n)
+    pool.map(partial(parallel_with_rt,works=go,pm=k),range(n))
+    
+    print("Finished all processes")
+
+def testing_rt_first_10_res_parallel(k=50,n=10):
+    fin=usefile("rts/comparing.root","READ")
+    go={}
+    for i in range(10):
+        go[i]=1
+    for i in range(120):
+        name="rtrelation"+str(i)
+        checkrt=fin.Get(name)
+        if not checkrt.GetEntries()>0:
+            go[i/12]=0
+    fin.Close()
+    pool=multiprocessing.Pool(n)
+    pool.map(partial(parallel_comparing,works=go,pm=k),range(n))
+    
+    print("Finished all processes")
+
+def parallel_with_rt(i,works,pm):
+    if works[i]==1:
+        fin=usefile("rts/rts_first_30_pm_"+str(pm)+".root","READ")
+        fout=usefile("iterations/first_it_first_30_res_0"+str(i)+"pm_"+str(pm)+".root","RECREATE")
+        used_rts={}
+        for k in range(12):
+            name="hrtrel"+str(i*12+k)+"pm"+str(pm)
+            used_rts[k]=fin.Get(name)
+        itTree=calcTreewithrt(used_rts,sTree.GetEntries())
+        print("Done with a parallel process")
+        print(itTree)
+        itTree.Write()
+        print("Written")
+        fout.Close()
+        print("FOUT Closed")
+        fin.Close()
+        print("FIN Closed")
+    else:
+        print("No functional rt relation")
+        
+def parallel_comparing(i,works,pm):
+    if works[i]==1:
+        fin=usefile("rts/comparing.root","READ")
+        fout=usefile("iterations/comparing_results_res_"+str(i+1)+".root","RECREATE")
+        used_rts={}
+        for k in range(12):
+            name="rtrelation"+str(k+i*12)
+            used_rts[k]=fin.Get(name)
+        itTree=calcTreewithrt(used_rts,sTree.GetEntries())
+        print("Done with a parallel process")
+        print(itTree)
+        itTree.Write()
+        print("Written")
+        fout.Close()
+        print("FOUT Closed")
+        fin.Close()
+        print("FIN Closed")
+    else:
+        print("No functional rt relation")
+
+def combine_trees(fins):
+    TTracksCombined = ROOT.TTree("TTracksCombined","Event Information")
+    
+    residuum = numpy.empty((576), dtype="float32")
+    hitradius = numpy.empty((576), dtype="float32")
+    trackdistance = numpy.empty((576), dtype="float32")
+    channel = numpy.empty((576), dtype="uint16")
+    eventnum = numpy.empty((1), dtype="uint32")
+    hittime = numpy.empty((576), dtype="float32")
+    
+   
+    TTracksCombined.Branch("channel",channel,"channel[576]/s")
+    TTracksCombined.Branch("eventnum",eventnum,"eventnum/i")
+    TTracksCombined.Branch("residuum",residuum,"residuum[576]/F")
+    TTracksCombined.Branch("hitradius",hitradius,"hitradius[576]/F")
+    TTracksCombined.Branch("trackdistance",trackdistance,"trackdistance[576]/F")
+    TTracksCombined.Branch("hittime",hittime,"hittime[576]/F")
+
+    for i in range(len(fins)):
+        currentTrack=fins[i].Get("TTracksEvent")
+        for i in currentTrack:
+            print("Eventnumber:")
+            print(i.eventnum)
+            for j in range(576):
+                channel[j]=i.channel[j]
+                eventnum[0]=i.eventnum
+                residuum[j]=i.residuum[j]
+                hitradius[j]=i.hitradius[j]
+                trackdistance[j]=i.trackdistance[j]
+                hittime[j]=i.hittime[j]
+            TTracksCombined.Fill()
+    return TTracksCombined
+
+def detrts(tdc):
+    newrt={}
+    test = ROOT.MufluxRTTools()
+    for i in range(len(tdc)):
+        for k in range(6):
+            newrt[6*i+k]=test.detRT(tdc[i],5*k+30)
+    return newrt
+
+def detrt(tdc,pm):
+    test=ROOT.MufluxRTTools()
+    newrt=test.detRT(tdc,pm)
+    return newrt
+
+def usefile(name,action):
+    this_file=ROOT.TFile.Open("/nfs/neutrino/data3/SHiP/FairShip/uh2neutrino-wgs03/user/morten/"+name,action)
+    return this_file
+
+def findTracks(PR = 1,linearTrackModel = False,withCloneKiller=True):
+   if PR < 3 and sTree.GetBranch('FitTracks'): return sTree.FitTracks
+   if PR%2==0 : 
+    trackCandidates = testPR()
+    if len(trackCandidates)>1: trackCandidates=cloneKiller(trackCandidates)
+    return trackCandidates
+   if PR == 13: # refit tracks
+        trackCandidates=[]
+        keysToDThits = MakeKeysToDThits(cuts['lateArrivalsToT'])
+        for itrack in range(sTree.FitTracks.GetEntries()):
+           trInfo = sTree.TrackInfos[itrack]
+           oTrack = sTree.FitTracks[itrack]
+           P = 5.
+           fst = oTrack.getFitStatus()
+           if fst.isFitConverged() and fst.getNdf()>1:
+            try: 
+             sta = oTrack.getFittedState(0)
+             P   = sta.getMomMag()
+            except: 
+             print "cannot get fittedState(0)"
+           hitList=[]
+           for n in range(trInfo.N()):
+              detID = trInfo.detId(n)
+              hitList.append(keysToDThits[detID][0])
+           aTrack = fitTrack(hitList,P)
+           if type(aTrack) == type(1): continue
+           trackCandidates.append(aTrack)
+        return trackCandidates
+# switch of trackfit material effect in first pass
+   materialEffects(False)
+   keysToDThits=MakeKeysToDThits(cuts['lateArrivalsToT'])
+   vbot,vtop = strawPositionsBotTop[30002001]
+   T3z = vbot[2]
+   T3ytop = vtop[1]
+   T3ybot = vbot[1]
+   trackCandidates = []
+   clusters = findDTClusters(removeBigClusters=True)
+   # now we have to make a loop over all combinations 
+   allStations = True
+   for s in range(1,5):
+      if len(clusters[s][0])==0: allStations = False
+   if len(clusters[1][1])==0 or len(clusters[2][2])==0:   allStations = False
+   if allStations:
+    t1t2cand = []
+    # list of lists of cluster1, cluster2, x
+    t3t4cand = []
+    h['dispTrackSeg'] = []
+    nTrx = -1
+    for cl1 in clusters[1][0]:
+     for cl2 in clusters[2][0]:
+      slopeA,bA = getSlopes(cl1,cl2)
+      x1 = zgoliath*slopeA+bA
+      t1t2cand.append([cl1,cl2,x1,slopeA,bA])
+      nTrx+=1
+      if Debug:
+       nt = len(h['dispTrackSeg'])
+       h['dispTrackSeg'].append( ROOT.TGraph(2) )
+       h['dispTrackSeg'][nt].SetPoint(0,0.,bA)
+       h['dispTrackSeg'][nt].SetPoint(1,400.,slopeA*400+bA)
+       h['dispTrackSeg'][nt].SetLineColor(ROOT.kRed+nTrx)
+       h['dispTrackSeg'][nt].SetLineWidth(2)
+       h['simpleDisplay'].cd(1)
+       h['dispTrackSeg'][nt].Draw('same')
+       nt+=1
+    for cl1 in clusters[3][0]:
+     for cl2 in clusters[4][0]:
+      slopeA,bA = getSlopes(cl1,cl2)
+      x1 = zgoliath*slopeA+bA
+      t3t4cand.append([cl1,cl2,x1,slopeA,bA])
+      if Debug:
+       nt = len(h['dispTrackSeg'])
+       h['dispTrackSeg'].append( ROOT.TGraph(2) )
+       h['dispTrackSeg'][nt].SetPoint(0,300.,slopeA*300+bA)
+       h['dispTrackSeg'][nt].SetPoint(1,900.,slopeA*900+bA)
+       h['dispTrackSeg'][nt].SetLineColor(ROOT.kBlue)
+       h['dispTrackSeg'][nt].SetLineWidth(2)
+       h['simpleDisplay'].cd(1)
+       h['dispTrackSeg'][nt].Draw('same')
+       nt+=1
+    if Debug: 
+      print "trackCandidates",len(t1t2cand),len(t3t4cand)
+      h['simpleDisplay'].Update()
+    nTrx = -1
+    for nt1t2 in range(len(t1t2cand)):
+     t1t2 = t1t2cand[nt1t2]
+     nTrx+=1
+     for nt3t4 in range(len(t3t4cand)):
+      t3t4 = t3t4cand[nt3t4]
+      delx = t3t4[2]-t1t2[2]
+      h['delx'].Fill(delx)
+# check also extrapolations at t1 t2, or t3 t4
+# makes only sense for zero field
+      if linearTrackModel: makeLinearExtrapolations(t1t2,t3t4)
+      if abs(delx) < cuts['delxAtGoliath']:
+# check for matching u and v hits, make uv combination and check extrap to 
+       stereoHits = {}
+       if Debug:  print "stereo clusters",len(clusters[1][1]),len(clusters[2][2])
+       for nu in range(len(clusters[1][1])):
+        stereoHits[1]={}
+        clu = clusters[1][1][nu]
+        mean_u = 0
+        n_u = 0 
+        for cl in clu:
+           botA,topA = strawPositionsBotTop[cl[0].GetDetectorID()]
+           z = (botA[2]+topA[2])/2.
+           sl  = (botA[1]-topA[1])/(botA[0]-topA[0])
+           b = topA[1]-sl*topA[0]
+           yest = sl*(t1t2[3]*topA[2]+t1t2[4])+b
+           rc = h['yest'].Fill(yest)
+           if yest > botA[1]+cuts['yMax'] : continue
+           if yest < topA[1]-cuts['yMax'] : continue
+           stereoHits[1][cl[0].GetDetectorID()]=[cl[0],sl,b,yest,z]
+           mean_u+=yest
+           n_u+=1
+        mean_u = mean_u/float(n_u)
+        if Debug:  print "0 stereo u",len(stereoHits[1])
+        for x in stereoHits[1].keys():
+           delta = stereoHits[1][x][3]-mean_u
+           rc = h['delta_mean_uv'].Fill(delta)
+           if abs(delta)>cuts['hitDist']:  stereoHits[1].pop(x)
+# new idea, calulate average of y coordinates, reject hits with distance > 2.5cm!!!!!
+        for nv in range(len(clusters[2][2])):
+         mean_v = 0
+         n_v = 0 
+         stereoHits[2]={}
+         clv =  clusters[2][2][nv]
+         for cl in clv: 
+           botA,topA = strawPositionsBotTop[cl[0].GetDetectorID()]
+           z = (botA[2]+topA[2])/2.
+           sl  = (botA[1]-topA[1])/(botA[0]-topA[0])
+           b = topA[1]-sl*topA[0]
+           yest = sl*(t1t2[3]*topA[2]+t1t2[4])+b
+           rc = h['yest'].Fill(yest)
+           if yest > botA[1]+cuts['yMax'] : continue
+           if yest < topA[1]-cuts['yMax'] : continue
+           stereoHits[2][cl[0].GetDetectorID()]=[cl[0],sl,b,yest,z]
+           mean_v+=yest
+           n_v+=1
+         mean_v = mean_v/float(n_v)
+         if Debug:  print "1 stereo v",len(stereoHits[2])
+         for x in stereoHits[2].keys():
+           delta = stereoHits[2][x][3]-mean_v
+           rc = h['delta_mean_uv'].Fill(delta)
+           if abs(delta)>cuts['hitDist']:  stereoHits[2].pop(x)
+#
+         if Debug:  print "stereo  u v",len(stereoHits[1]),len(stereoHits[2])
+         if len(stereoHits[1])<cuts['minLayersUV'] or len(stereoHits[2])<cuts['minLayersUV']: continue
+         slopeA,bA = getSlopes(stereoHits[1],stereoHits[2],'_uv')
+         if Debug: 
+            print "y slope",slopeA,bA
+            print '----> u'
+            for x in stereoHits[1]:  print stereoHits[1][x][3],stereoHits[1][x][4]
+            print '----> v'
+            for x in stereoHits[2]:  print stereoHits[2][x][3],stereoHits[2][x][4]
+         # remove unphysical combinations, pointing outside t3
+         yAtT3 = T3z*slopeA + bA
+         if Debug: print "uv",nu,nv,yAtT3,T3ybot ,T3ytop , (yAtT3 - T3ybot)  > 2*cuts['yMax'] ,(T3ytop - yAtT3) > 2*cuts['yMax'] 
+         if  (yAtT3 - T3ybot)  > 2*cuts['yMax']  or (T3ytop - yAtT3) > 2*cuts['yMax'] : continue
+         if Debug:
+          nt = len(h['dispTrackSeg'])
+          h['dispTrackSeg'].append( ROOT.TGraph(2) )
+          h['dispTrackSeg'][nt].SetPoint(0,0.,bA)
+          h['dispTrackSeg'][nt].SetPoint(1,900.,slopeA*900+bA)
+          h['dispTrackSeg'][nt].SetLineColor(ROOT.kRed+nTrx)
+          h['dispTrackSeg'][nt].SetLineWidth(2)
+          h['simpleDisplay'].cd(1)
+          h['dispTrackSeg'][nt].Draw('same')
+          h['simpleDisplay'].Update()
+          nt+=1
+#
+         hitList = []
+         for p in range(2):
+          for cl in t1t2[p]: hitList.append(cl[0])
+         for p in stereoHits:
+          for cl in stereoHits[p]: hitList.append(stereoHits[p][cl][0])
+         for p in range(2):
+          for cl in t3t4[p]: hitList.append(cl[0])
+# add late arrivals
+         if cuts['lateArrivalsToT']<3000:
+          tmp=[]
+          for x in hitList:
+           l =  len(keysToDThits[x.GetDetectorID()])
+           for k in range(1,l):
+            key = keysToDThits[x.GetDetectorID()][k]
+            tmp.append(sTree.Digi_LateMufluxSpectrometerHits[key])
+          hitList=hitList+tmp
+         if linearTrackModel: 
+          trackCandidates = hitList
+         else:
+          if zeroField: momFromptkick = 1000.
+          else: momFromptkick=ROOT.TMath.Abs(1.03/(t3t4[3]-t1t2[3]+1E-20))
+          if Debug:  print "fit track t1t2 %i t3t4 %i stereo %i,%i, with hits %i,  delx %6.3F, pstart %6.3F"%(nt1t2,nt3t4,nu,nv,len(hitList),delx,momFromptkick)
+          aTrack = fitTrack(hitList,momFromptkick)
+          if Debug:  print "result of trackFit",aTrack
+          if type(aTrack) != type(1):
+# check if track is still in acceptance:
+            rc,pos,mom = extrapolateToPlane(aTrack,T3z)
+            reject = False
+            if ( (pos[1] - T3ybot)  > 1.2*cuts['yMax'] or (T3ytop - pos[1]) > 1.2*cuts['yMax'] ): reject = True
+            mStatistics = countMeasurements(aTrack,PR)
+            if len(mStatistics['u'])<cuts['minLayersUV'] or len(mStatistics['v'])<cuts['minLayersUV']: reject = True # require 2 measurements in each view
+            if not reject: trackCandidates.append(aTrack)
+            else:
+             aTrack.Delete()
+             if Debug: 
+              print "track rejected, outside T3 acceptance or not enough u/v measurements"
+              print  (pos[1] - T3ybot)  > 1.2*cuts['yMax'] , (T3ytop - pos[1]) > 1.2*cuts['yMax'] , \
+                      len(mStatistics['u'])<2, len(mStatistics['v'])<2
+   if withMaterial: materialEffects(True)
+   if withCloneKiller:
+    if len(trackCandidates)>1: trackCandidates = cloneKiller(trackCandidates)
+    if Debug: print "# tracks after clonekiller = ",len(trackCandidates)
+    if withMaterial:
+     for aTrack in trackCandidates:
+      fitter.processTrack(aTrack)
+      if Debug: printTrackMeasurements(aTrack,PR)
+# switch on trackfit material effect for final fit
+   return trackCandidates
+
+def parse_det_id(det_id):
+    """Parse the detector id to human readable dictionary so that a specific tube can easily be
+    identified and addressed out of a bigger detector arrangement
+    
+    Parameters
+    ----------
+    det_id: int
+        Detector ID that is to be parsed
+        
+    Returns
+    -------
+    dict
+        dictionary containing the result in human readable form
+    """
+    result = {}
+    str_id = str(det_id)
+    last_two = int(str_id[-2:]) #last four digits of the detector ID
+    #parse view
+    view = "X"
+    result['station'] = det_id / 10000000
+    if result['station'] == 1:
+        if str_id[1] == '1':
+            view = "U"
+    elif result['station'] == 2:
+        if str_id[1] == '0':
+            view = "V"
+            
+    #parse module
+    module = "T" + str(result['station'])
+    if result['station'] >= 3:
+        if last_two <= 12:
+            module += "d"
+        elif last_two <= 24:
+            module += "c"
+        elif last_two <= 36:
+            module += "b"
+        else:
+            module += "a"
+            
+    module += view
+    result['module'] = module
+    return result
+
+
+def distance_to_wire(tube,mom=None,pos=None):
+    """Calculates the distance of closest approach for a track and a tube in mm.
+    Note: This distance is positive if a valid track was used.
+    
+    Parameters
+    ----------
+    mom: ROOT.TVector3
+        Momentum (a.k.a direction) of the track
+    
+    pos: ROOT.TVector3
+        Position on the track
+        
+    Returns
+    -------
+    float
+        Closest distance between track and wire in mm
+    """
+    vtop,vbot = tube.wire_end_positions()    
+    normal_vector = mom.Cross(vtop-vbot)
+    vec_any_two_points = vbot - pos
+    distance = (vec_any_two_points.Dot(normal_vector)) / normal_vector.Mag()
+
+    return distance
+
+
+def calculate_distances(track, dtmodules, event, Dist2D, mintime):
+    """
+    
+    Parameters
+    ----------
+    track: 
+        genfit Track object for that the residuals should be calculated
+    dtmodules:
+        dictionary containing the drift tube modules as DtAlignment.DtModule objects
+    module_residuals:
+        dictionary containing the residuals per module with the module name as keys.
+        This is where the result is written to
+    """     
+    module_residuals = {}
+    for key in dt_modules.keys():
+        module_residuals[key] = []
+               
+    # 1.) Loop over hits in track
+    n_points = track.getNumPointsWithMeasurement()
+    points = track.getPointsWithMeasurement()
+    for i in range(n_points):
+        point = points[i]
+        raw_measurement = point.getRawMeasurement()
+        det_id = raw_measurement.getDetId()
+        rt_dist = raw_measurement.getRawHitCoords()[6]  # rt distance stored here
+        # 2.) Parse detector id to module
+        module_id = parse_det_id(det_id)
+        module = dtmodules[module_id['module']]
+        # 3.) Find correct drift tube in module
+        for j in range(len(module.get_tubes())):
+            tube = module.get_tubes()[j]
+            if tube._ID == det_id:
+                break
+        tube = module.get_tubes()[j]
+    
+        # 4.) Read fitted position and momentum from fitted state
+        try:
+            fitted_state = track.getFittedState(i)
+            mom = fitted_state.getMom()
+            pos = fitted_state.getPos()
+        
+	# 5.) Find correct time for hit
+            rc = sTree.GetEvent(event)
+            for hit in sTree.Digi_MufluxSpectrometerHits:
+	    	  if hit.GetDetectorID() == det_id and hit.hasTimeOverThreshold() and hit.GetTimeOverThreshold() > mintime:
+                   time = hit.GetDigi()
+                   dist = abs(distance_to_wire(tube, mom, pos))
+                   resid = abs(dist - rt_dist)
+                   for a in range(10):
+                       if resid < (0.1 + a / 10.0):
+                           Dist2D[a].Fill(time, dist)
+                   break
+	    # print(dist)
+        except: continue
+
+
+def calculate_distances_ch_tree(track,dtmodules,event,mintime,residuum,hitradius,trackdistance,hittime,channel):
+    """
+    
+    
+    Parameters
+    ----------
+    track: 
+        genfit Track object for that the residuals should be calculated
+    dtmodules:
+        dictionary containing the drift tube modules as DtAlignment.DtModule objects
+    module_residuals:
+        dictionary containing the residuals per module with the module name as keys.
+        This is where the result is written to
+    """     
+    module_residuals = {}
+    for key in dt_modules.keys():
+        module_residuals[key] = []
+               
+    # 1.) Loop over hits in track
+    n_points = track.getNumPointsWithMeasurement()
+    points = track.getPointsWithMeasurement()
+    for i in range(n_points):
+        point = points[i]
+        raw_measurement = point.getRawMeasurement()
+        det_id = raw_measurement.getDetId()
+        rt_dist = raw_measurement.getRawHitCoords()[6] #rt distance stored here
+        # 2.) Parse detector id to module
+        module_id = parse_det_id(det_id)
+        module = dtmodules[module_id['module']]
+        # 3.) Find correct drift tube in module
+        for j in range(len(module.get_tubes())):
+            tube = module.get_tubes()[j]
+            if tube._ID == det_id:
+                break
+        tube = module.get_tubes()[j]
+    
+        # 4.) Read fitted position and momentum from fitted state
+        
+        try:
+            fitted_state = track.getFittedState(i)
+            mom = fitted_state.getMom()
+            pos = fitted_state.getPos()
+        
+    # 5.) Find correct time for hit
+            rc = sTree.GetEvent(event)
+            test=ROOT.MufluxRTTools()
+            for hit in sTree.Digi_MufluxSpectrometerHits:
+              if hit.GetDetectorID() == det_id and hit.hasTimeOverThreshold() and hit.GetTimeOverThreshold() > mintime:
+                   channel[test.chnumgasorder(det_id)]=1
+                   time = hit.GetDigi()
+                   hittime[test.chnumgasorder(det_id)]=time
+                   dist = distance_to_wire(tube, mom, pos)
+                   trackdistance[test.chnumgasorder(det_id)]=dist
+                   resid = abs(dist)-rt_dist
+                   hitradius[test.chnumgasorder(det_id)]=rt_dist
+                   residuum[test.chnumgasorder(det_id)]=resid
+                   break
+        #print(dist)
+        except: continue
+
+
+def calculate_distances2(track,dtmodules,event,Dist2D,mintime):
+    """
+    
+    Parameters
+    ----------
+    track: 
+        genfit Track object for that the residuals should be calculated
+    dtmodules:
+        dictionary containing the drift tube modules as DtAlignment.DtModule objects
+    module_residuals:
+        dictionary containing the residuals per module with the module name as keys.
+        This is where the result is written to
+    """     
+    module_residuals = {}
+    for key in dt_modules.keys():
+        module_residuals[key] = []
+               
+    # 1.) Loop over hits in track
+    n_points = track.getNumPointsWithMeasurement()
+    points = track.getPointsWithMeasurement()
+    for i in range(n_points):
+        point = points[i]
+        raw_measurement = point.getRawMeasurement()
+        det_id = raw_measurement.getDetId()
+        rt_dist = raw_measurement.getRawHitCoords()[6] * u.mm
+        # 2.) Parse detector id to module
+        module_id = parse_det_id(det_id)
+        module = dtmodules[module_id['module']]
+        # 3.) Find correct drift tube in module
+        for j in range(len(module.get_tubes())):
+            tube = module.get_tubes()[j]
+            if tube._ID == det_id:
+                break
+        tube = module.get_tubes()[j]
+    
+        # 4.) Read fitted position and momentum from fitted state
+        
+        try:
+            fitted_state = track.getFittedState(i)
+            mom = fitted_state.getMom()
+            pos = fitted_state.getPos()
+        except: continue
+
+        vtop,vbot = tube.wire_end_positions()
+    # 5.) Find correct time for hit
+        test = ROOT.MufluxRTTools()
+        rc = sTree.GetEvent(event)
+        for hit in sTree.Digi_MufluxSpectrometerHits:
+            if hit.hasTimeOverThreshold():
+                time = hit.GetTimeOverThreshold()
+                if hit.GetDetectorID() == det_id and time > mintime:
+                    dist = test.calculate2D(det_id, vtop, vbot, pos, mom)
+                    resid = abs(rt_dist-dist)
+                    if resid < 1:
+                        Dist2D.Fill(time,dist)
+                    break
+        #print(dist)
+        
 
 def plotEvent(n=-1):
    h['dispTrack']=[]
@@ -2217,7 +3619,8 @@ def testPR(onlyHits=False):
    s,v,p,l,view,channelID,tdcId,nRT = stationInfo(hit)
    if exclude_layer != None and view != '_x':
      if (2*p+l)==exclude_layer:  continue
-   vbot,vtop = strawPositionsBotTop[detID]
+   try: vbot,vtop = strawPositionsBotTop[detID]
+   except: continue
    tdc = hit.GetDigi()
    distance = 0
    if withTDCPR: distance = RT(hit,tdc)
@@ -2425,6 +3828,28 @@ def findTracks(PR = 1,linearTrackModel = False,withCloneKiller=True):
     trackCandidates = testPR()
     if len(trackCandidates)>1: trackCandidates=cloneKiller(trackCandidates)
     return trackCandidates
+   if PR == 13: # refit tracks
+        trackCandidates=[]
+        keysToDThits = MakeKeysToDThits(cuts['lateArrivalsToT'])
+        for itrack in range(sTree.FitTracks.GetEntries()):
+           trInfo = sTree.TrackInfos[itrack]
+           oTrack = sTree.FitTracks[itrack]
+           P = 5.
+           fst = oTrack.getFitStatus()
+           if fst.isFitConverged() and fst.getNdf()>1:
+            try: 
+             sta = oTrack.getFittedState(0)
+             P   = sta.getMomMag()
+            except: 
+             print "cannot get fittedState(0)"
+           hitList=[]
+           for n in range(trInfo.N()):
+              detID = trInfo.detId(n)
+              hitList.append(keysToDThits[detID][0])
+           aTrack = fitTrack(hitList,P)
+           if type(aTrack) == type(1): continue
+           trackCandidates.append(aTrack)
+        return trackCandidates
 # switch of trackfit material effect in first pass
    materialEffects(False)
    keysToDThits=MakeKeysToDThits(cuts['lateArrivalsToT'])
@@ -5632,3 +7057,38 @@ elif options.command == "test":
  yep.stop()
  print "finished"
 #alignConstants.pop('strawPositions') # if recorded alignment constants should not be used.
+elif options.command == "Make_tree":
+    #### Calculating residua, trackdistances, radia, ... for one Spill with the initial rt relation
+    importAlignmentConstants()
+    importRTrel()
+    fout=usefile("tree_initial"+fname,"RECREATE")
+    tree=calcTreeinitial(sTree.GetEntries())    
+    tree.Write()
+    fout.Close()
+elif options.command == "Make_tdcspec":
+    #### Creating the time distance spectrum for one Spill
+    importAlignmentConstants()
+    importRTrel()
+    fout=usefile("tdcspectrum"+fname,"RECREATE")
+    ### Calculating the Spectrum; m corresponds to the Number of spectra. 12 = 1 spectrum for each drifttube module
+    tdcspec=createTDCspecs(n=sTree.GetEntries(), m = 12, minToT=-999)
+    print("Start Writing") 
+    for i in range(len(tdcspec)):
+        tdcspec[i].Write()
+    print("Close file")
+    fout.Close()
+elif options.command == "Make_tree_it":
+    importAlignmentConstants()
+    importRTrel()
+    fin=usefile("rts/comparing.root","READ") ### Source of rt-relation
+    fout=usefile("tree_it_again_rt_vers_1_4_01_res_pm_50"+fname,"RECREATE") ## Output file name
+    use_rts={}
+    for i in range(12):
+        name="rtrelation"+str(i)
+        use_rts[i]=fin.Get(name)    ### Getting the rt relation, name might change with different source file    
+    #### Calculating the next iteration
+    tree=calcTreewithrt(use_rts,sTree.GetEntries())
+    tree.Write()
+    fout.Close()
+    fin.Close()
+    print("closed")

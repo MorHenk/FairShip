@@ -77,7 +77,7 @@ cmake "$SOURCEDIR"                                                 \
       ${BOOST_ROOT:+-DBOOST_LIBRARYDIR="$BOOST_ROOT"/lib}          \
       -DCMAKE_BINARY_DIR="$INSTALLROOT"                            \
       -DCMAKE_INSTALL_PREFIX="$INSTALLROOT"
-make
+make -j38
 
 cp "$SOURCEDIR"/config.sh  config.sh
 {

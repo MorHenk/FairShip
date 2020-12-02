@@ -1357,7 +1357,7 @@ void MufluxSpectrometer::Reset()
 
 // -----   Public method Spectrometer Decode    -------------------------------------------
 // -----   returns station layer ... numbers -----------------------------------
-void MufluxSpectrometer::TubeDecode(Int_t detID,int &statnb,int &vnb,int &pnb,int &lnb, int &snb)
+ void MufluxSpectrometer::TubeDecode(Int_t detID,int &statnb,int &vnb,int &pnb,int &lnb, int &snb)
 {
   statnb = detID/10000000;
   vnb =  (detID - statnb*10000000)/1000000;

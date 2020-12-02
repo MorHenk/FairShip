@@ -1,5 +1,4 @@
-
-import os,subprocess,ROOT,time,multiprocessing
+import os,subprocess,ROOT,time,multiprocessing,re
 from rootpyPickler import Unpickler
 from rootpyPickler import Pickler
 import pwd
@@ -467,5 +466,167 @@ def pot():
  keys.sort()
  for k in keys: print k,':',scalerStat[k]
 
+def Make_t_Dist_TH2D_single_rootfile(fname):
+    """ Perform a Fit to create drifttime to trackdistance diagrams for one file.
+    
+    Version: 1.0
+    Date: Jul. 25, 2020
+    
+    Parameters
+    ----------
+    fname: string
+        filename of the rootfile (ending _RT.root or _RT_refit.root - not necessary but that file format that is conventionally
+        stored with such names). This must include the full path to that file relative to the current working directory from
+        where this script is called.
+    """
+    cmd = "python "+pathToMacro+"drifttubeMonitoring.py -c Make_t_Dist_TH2D -f "+fname
+    print("Running command: {}".format(cmd))
+    os.system(cmd)
+
+def Make_t_Dist_TH2D(max_spills=None):
+    """ Create drifttime to trackdistance TH2D for several root files.
+    
+    Version: 1.0
+    Date: Jul. 25.,2020
+    
+    Parameter
+    -----------
+    max_spills: int
+    
+    """
+    refitted_files = []
+    file_pattern = re.compile("SPILLDATA.+\_RT\_refit\.root")
+    for file in os.listdir('.'):
+        match = file_pattern.match(file)
+        if match:
+            refitted_files.append(match.group())
+    if max_spills:
+        refitted_files = refitted_files[:max_spills]
+    print(refitted_files)
+    
+    pool = multiprocessing.Pool(ncpus)
+    pool.map(Make_t_Dist_TH2D_single_rootfile, refitted_files)
+    
+def Make_tree_single_rootfile(fname):
+    """ Perform a Fit to create drifttime to trackdistance diagrams for one file.
+    
+    Version: 1.0
+    Date: Jul. 25, 2020
+    
+    Parameters
+    ----------
+    fname: string
+        filename of the rootfile (ending _RT.root or _RT_refit.root - not necessary but that file format that is conventionally
+        stored with such names). This must include the full path to that file relative to the current working directory from
+        where this script is called.
+    """
+    cmd = "python "+pathToMacro+"drifttubeMonitoring.py -c Make_tree -f "+fname
+    print("Running command: {}".format(cmd))
+    os.system(cmd)
 
 
+def Make_tree(max_spills=None):
+    """ Create drifttime,channel,eventnum,residuum,hitradius,trackdistance tree for several root files.
+    
+    Version: 1.0
+    Date: Jul. 25.,2020
+    
+    Parameter
+    -----------
+    max_spills: int
+    
+    
+    """
+    refitted_files = []
+    file_pattern = re.compile("SPILLDATA.+\_RT\_refit\.root")
+    for file in os.listdir('.'):
+        match = file_pattern.match(file)
+        if match:
+            refitted_files.append(match.group())
+    if max_spills:
+        refitted_files = refitted_files[:max_spills]
+    print(refitted_files)
+    
+    pool = multiprocessing.Pool(ncpus)
+    pool.map(Make_tree_single_rootfile, refitted_files)
+    
+def Make_tdcspec_single_rootfile(fname):
+    """ Create the tdcspectrum for one file.
+    
+    Version: 1.0
+    Date: Oct. 21, 2020
+    
+    Parameters
+    ----------
+    fname: string
+        filename of the rootfile (ending _RT.root or _RT_refit.root - not necessary but that file format that is conventionally
+        stored with such names). This must include the full path to that file relative to the current working directory from
+        where this script is called.
+    """
+    cmd = "python "+pathToMacro+"drifttubeMonitoring.py -c Make_tdcspec -f "+fname
+    print("Running command: {}".format(cmd))
+    os.system(cmd)    
+    
+def Make_tdcspec(max_spills=None):
+    """Create tdcspectra for several spills root files.
+    Version: 1.0
+    Date: Oct. 21.,2020
+    
+    Parameter
+    -----------
+    max_spills: int
+    """    
+    refitted_files = []
+    file_pattern = re.compile("SPILLDATA.+\_RT\_refit\.root")
+    for file in os.listdir('.'):
+        match = file_pattern.match(file)
+        if match:
+            refitted_files.append(match.group())
+    if max_spills:
+        refitted_files = refitted_files[:max_spills]
+    print(refitted_files)
+    
+    pool = multiprocessing.Pool(ncpus)
+    pool.map(Make_tdcspec_single_rootfile, refitted_files)
+
+def Make_tree_it_single_rootfile(fname):
+    """ Perform a Fit to create drifttime to trackdistance diagrams for one file.
+    
+    Version: 1.0
+    Date: 16.9., 2020
+    
+    Parameters
+    ----------
+    fname: string
+        filename of the rootfile (ending _RT.root or _RT_refit.root - not necessary but that file format that is conventionally
+        stored with such names). This must include the full path to that file relative to the current working directory from
+        where this script is called.
+    """
+    cmd = "python "+pathToMacro+"drifttubeMonitoring.py -c Make_tree_it -f "+fname
+    print("Running command: {}".format(cmd))
+    os.system(cmd)
+def Make_tree_it(max_spills=None):
+    """ Create drifttime,channel,eventnum,residuum,hitradius,trackdistance tree for several root files.
+    
+    Version: 1.0
+    Date: Jul. 25.,2020
+    
+    Parameter
+    -----------
+    max_spills: int
+    
+    
+    """
+    refitted_files = []
+    file_pattern = re.compile("SPILLDATA.+\_RT\_refit\.root")
+    for file in os.listdir('.'):
+        match = file_pattern.match(file)
+        if match:
+            refitted_files.append(match.group())
+    if max_spills:
+        refitted_files = refitted_files[:max_spills]
+    print(refitted_files)
+    
+    pool = multiprocessing.Pool(ncpus)
+    pool.map(Make_tree_it_single_rootfile, refitted_files)
+    
